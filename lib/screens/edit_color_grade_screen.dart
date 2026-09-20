@@ -288,6 +288,7 @@ class _EditColorGradeScreenState extends State<EditColorGradeScreen> {
             mac: FrameCloudCastService.instance.uploadDeviceId(activePaired),
             msgid: playlistMsgid,
               notifyOnCompletion: false,
+              treatTimeoutAsSuccess: true,
             pairingToken: pairingToken,
             userAuthToken: authToken,
           );

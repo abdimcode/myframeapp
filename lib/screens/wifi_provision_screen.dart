@@ -119,17 +119,13 @@ class _WifiProvisionScreenState extends State<WifiProvisionScreen> {
 
   static const _kSeenPasswordGuide = 'has_seen_wifi_password_guide';
 
-  /// Show the password coach-mark on first pairing, or when the user taps
-  /// "Connect now" on a secured network with an empty password. Best-effort —
-  /// never blocks the Wi‑Fi/BLE flow.
+  /// The in-flow bouncing hand/pill coach ([WifiPasswordCoachMark]) is the
+  /// primary guidance now, so we no longer auto-open the full-screen spotlight
+  /// on entry (it would cover the pill). The spotlight is still used as the
+  /// defensive guide when the user taps Connect on a secured network with an
+  /// empty password (see `_connectInner`).
   Future<void> _maybeShowPasswordGuideOnEntry() async {
-    if (!mounted) return;
-    final prefs = await SharedPreferences.getInstance();
-    final seen = prefs.getBool(_kSeenPasswordGuide) ?? false;
-    if (seen) return;
-    // Only guide when a network is selected to type into.
-    if (_selectedSsid == null && _ssidCtrl.text.trim().isEmpty) return;
-    _presentPasswordGuide();
+    return;
   }
 
   void _presentPasswordGuide() {
@@ -1085,14 +1081,15 @@ class _WifiProvisionScreenState extends State<WifiProvisionScreen> {
                                 ),
                               ),
                               const SizedBox(height: 8),
-                              // Lightweight bouncing coach pill; hides itself on
-                              // focus/typing. Superseded by the full spotlight
-                              // overlay (first-pairing) which has a Got it step.
-                              if (!_showPasswordGuide)
-                                WifiPasswordCoachMark(
-                                  controller: _passCtrl,
-                                  focusNode: _passwordFocusNode,
-                                ),
+                              // Bouncing hand/pill coach: "Enter Wi-Fi password
+                              // here". Always rendered while the field is empty
+                              // and unfocused; auto-hides the moment the user
+                              // focuses or types (independent of the one-time
+                              // spotlight overlay above).
+                              WifiPasswordCoachMark(
+                                controller: _passCtrl,
+                                focusNode: _passwordFocusNode,
+                              ),
                               TextField(
                                 key: _passwordFieldKey,
                                 controller: _passCtrl,

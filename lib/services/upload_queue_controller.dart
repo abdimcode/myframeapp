@@ -82,6 +82,7 @@ class UploadQueueController extends ChangeNotifier {
   String? _userAuthToken;
   int _attempts = 0;
   bool _disposed = false;
+  bool _treatTimeoutAsSuccess = false;
 
   /// The msgid for which a "Frame updated" notification has already fired, so
   /// the notification is emitted exactly once per job (never on repeat polls).
@@ -144,9 +145,15 @@ class UploadQueueController extends ChangeNotifier {
     String? pairingToken,
     String? userAuthToken,
     bool notifyOnCompletion = true,
+    /// Playlist/slideshow jobs can legitimately take minutes on e-ink hardware
+    /// (download + flash + refresh per image). When true, a server-side
+    /// `timeout_failed` is treated as "dispatch accepted, ACK is background"
+    /// and the banner clears quietly instead of flashing a red "Push failed".
+    bool treatTimeoutAsSuccess = false,
   }) {
     cancelTracking();
     _notifyOnCompletion = notifyOnCompletion;
+    _treatTimeoutAsSuccess = treatTimeoutAsSuccess;
     _activeMac = mac;
     _pairingToken = pairingToken;
     _userAuthToken = userAuthToken;
@@ -229,6 +236,11 @@ class UploadQueueController extends ChangeNotifier {
     }
     _attempts++;
     if (_attempts > _maxAttempts) {
+      if (_treatTimeoutAsSuccess) {
+        // Playlist dispatch was accepted (HTTP 200); ACK polling is background.
+        _clearWithCompleted();
+        return;
+      }
       _setFailed(
         PushJobView(
           stage: PushJobStage.failed,
@@ -286,6 +298,10 @@ class UploadQueueController extends ChangeNotifier {
         return;
       }
       if (next.stage == PushJobStage.failed) {
+        if (_treatTimeoutAsSuccess) {
+          _clearWithCompleted();
+          return;
+        }
         _setJob(next);
         _pollTimer?.cancel();
         _pollTimer = null;

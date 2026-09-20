@@ -289,6 +289,7 @@ class _SlideshowBatchScreenState extends State<SlideshowBatchScreen> {
         mac: FrameCloudCastService.instance.uploadDeviceId(frame),
         msgid: playlistMsgid,
         notifyOnCompletion: false,
+              treatTimeoutAsSuccess: true,
         pairingToken: pairingToken,
         userAuthToken: token.isNotEmpty ? token : null,
       );

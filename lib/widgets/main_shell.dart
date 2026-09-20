@@ -17,6 +17,7 @@ import '../services/external_share_inbox.dart';
 import '../services/fcm_service.dart';
 import '../services/share_extension_cache.dart';
 import '../services/share_incoming_service.dart';
+import '../services/personal_gallery_store.dart';
 import '../services/upload_queue_controller.dart';
 import '../services/sync_pipeline.dart';
 import '../settings/app_settings.dart';
@@ -122,6 +123,13 @@ class MainShellState extends State<MainShell> with WidgetsBindingObserver {
           await _removeStagedShareFiles(pending.paths);
         }
       }
+      // Land on the Gallery sub-tab matching the share: Playlists (1) for a
+      // multi-photo playlist share, Personal (0) for a single photo. Never
+      // leave the user on Personal after a playlist share.
+      if (mounted) {
+        final isPlaylist = pendingList.any((p) => p.isPlaylist);
+        ShellNavigation.goToGallery(subTab: isPlaylist ? 1 : 0);
+      }
     } catch (e) {
       AppDiagLog.verbose('[MainShell] consume pending native share: $e');
     } finally {
@@ -153,6 +161,11 @@ class MainShellState extends State<MainShell> with WidgetsBindingObserver {
       sessionId: pending.id,
       playlistName: s.myPlaylistName,
     );
+    // A playlist share must NEVER appear in the Personal feed — self-heal any
+    // leaked entries from earlier ingestion ordering.
+    if (pending.isPlaylist || pending.paths.length > 1) {
+      await PersonalGalleryStore.instance.removePaths(pending.paths);
+    }
     final queue = UploadQueueController.instance;
     if (pending.pushes.isEmpty) {
       if (_trackedNative.add(pending.id)) {
@@ -174,6 +187,7 @@ class MainShellState extends State<MainShell> with WidgetsBindingObserver {
         msgid: push.msgid,
         userAuthToken: app.authToken,
         notifyOnCompletion: !pending.isPlaylist,
+        treatTimeoutAsSuccess: pending.isPlaylist,
       );
     }
   }
@@ -242,6 +256,9 @@ class MainShellState extends State<MainShell> with WidgetsBindingObserver {
             sessionId: session,
             playlistName: s.myPlaylistName,
           );
+          if (paths.length > 1) {
+            await PersonalGalleryStore.instance.removePaths(paths);
+          }
           await DeviceStore.instance.load();
           final selected = await ShareExtensionCache.instance.consumeAutoSend();
           final frames = selected.isEmpty

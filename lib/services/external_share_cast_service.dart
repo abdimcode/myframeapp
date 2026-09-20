@@ -15,8 +15,11 @@ import 'frame_settings_store.dart';
 import 'frame_online_guard.dart';
 import 'gallery_image_normalizer.dart';
 import 'network_link.dart';
+import 'send_albums_store.dart';
 import 'slideshow_playlist_store.dart';
 import 'slideshow_remote_api.dart';
+import 'sync_pipeline.dart';
+import '../widgets/shell_navigation.dart';
 import 'upload_queue_controller.dart';
 
 /// External sharing → app (gallery / share sheet) upload orchestrator.
@@ -200,6 +203,14 @@ class ExternalShareCastService {
         break;
       }
 
+      // Local Playlist persistence: multi-photo external shares MUST create/
+      // append a real Playlist album (Playlists tab), never the Personal feed.
+      if (items.length > 1) {
+        await _persistSharedToPlaylist(items, strings);
+        // Keep the user on the Playlists tab after a multi-photo share.
+        ShellNavigation.goToGallery(subTab: 1);
+      }
+
       if (items.length > 1 &&
           ids.length == items.length &&
           pendingPaths.isEmpty) {
@@ -263,6 +274,7 @@ class ExternalShareCastService {
           pairingToken: frame.resolvedPairingToken,
           userAuthToken: authToken.trim().isEmpty ? null : authToken.trim(),
           notifyOnCompletion: false,
+              treatTimeoutAsSuccess: true,
         );
       }
     } catch (e) {
@@ -305,13 +317,45 @@ class ExternalShareCastService {
     final name = f.frameName?.trim() ?? '';
     return name.isNotEmpty ? name : f.listDisplayTitle(s);
   }
+
+  /// Creates/appends the default "My Playlist" album for a multi-photo external
+  /// share so the Playlists tab shows a permanent card (independent of frame
+  /// status polling / the temporary push queue).
+  Future<void> _persistSharedToPlaylist(List<String> paths, AppStrings strings) async {
+    if (paths.length < 2) return;
+    try {
+      final name = strings.myPlaylistName;
+      await SendAlbumsStore.instance.load();
+      SendAlbumEntry? mine;
+      for (final a in SendAlbumsStore.instance.albums) {
+        if (a.name.trim().toLowerCase() == name.trim().toLowerCase()) {
+          mine = a;
+          break;
+        }
+      }
+      String id;
+      if (mine == null) {
+        await SendAlbumsStore.instance.createAlbum(name, paths);
+        await SendAlbumsStore.instance.load();
+        id = SendAlbumsStore.instance.albums.first.id;
+      } else {
+        await SendAlbumsStore.instance.addPathsToAlbum(mine.id, paths);
+        id = mine.id;
+      }
+      unawaited(SyncPipeline.instance.onAlbumsChanged(albumId: id));
+    } catch (e) {
+      AppDiagLog.verbose('[ExternalShare] playlist persist failed: $e');
+    }
+  }
 }
 
 class ExternalShareCastSummary {
+
   const ExternalShareCastSummary({required this.sent, required this.queued});
 
   final int sent;
 
   /// True when some payloads were persisted for background retry.
   final bool queued;
+
 }

@@ -1070,6 +1070,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen>
               mac: FrameCloudCastService.instance.uploadDeviceId(activePaired),
               msgid: playlistMsgid,
               notifyOnCompletion: false,
+              treatTimeoutAsSuccess: true,
               pairingToken: pairingToken,
               userAuthToken: authToken,
             );
