@@ -16,7 +16,8 @@ import '../widgets/playlist_controls_widget.dart';
 /// Replaces the per-album playback configuration as the single unified source
 /// for a frame's slideshow behavior.
 class FrameSettingsScreen extends StatefulWidget {
-  const FrameSettingsScreen({super.key});
+  const FrameSettingsScreen({super.key, this.frame});
+  final PairedFrame? frame;
 
   @override
   State<FrameSettingsScreen> createState() => _FrameSettingsScreenState();
@@ -37,7 +38,7 @@ class _FrameSettingsScreenState extends State<FrameSettingsScreen> {
   Future<void> _load() async {
     try {
       await DeviceStore.instance.load();
-      final paired = DeviceStore.instance.cached;
+      final paired = widget.frame ?? DeviceStore.instance.cached;
       final profile = await FrameSettingsStore.instance.load(paired);
       if (!mounted) return;
       setState(() {
@@ -118,7 +119,6 @@ class _FrameSettingsScreenState extends State<FrameSettingsScreen> {
     );
 
     try {
-      await FrameSettingsStore.instance.save(paired, _profile);
       await FrameSettingsStore.instance.pushProfileToFrame(
         paired: paired,
         profile: _profile,

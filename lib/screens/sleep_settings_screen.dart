@@ -13,7 +13,8 @@ import '../services/sleep_mode_store.dart';
 /// preference locally, and relays the strict firmware `wifi_sleep` payload
 /// to the paired frame via the server. Album playback uses the `play` flow.
 class SleepSettingsScreen extends StatefulWidget {
-  const SleepSettingsScreen({super.key});
+  const SleepSettingsScreen({super.key, this.frame});
+  final PairedFrame? frame;
 
   @override
   State<SleepSettingsScreen> createState() => _SleepSettingsScreenState();
@@ -36,7 +37,7 @@ class _SleepSettingsScreenState extends State<SleepSettingsScreen> {
   }
 
   Future<void> _load() async {
-    final store = SleepModeStore.instance;
+    final store = SleepModeStore.forFrame(widget.frame ?? DeviceStore.instance.cached);
     await store.resolveForUi();
     await DeviceStore.instance.load();
     if (!mounted) return;
@@ -76,7 +77,7 @@ class _SleepSettingsScreenState extends State<SleepSettingsScreen> {
     if (_saving) return;
     setState(() => _saving = true);
     final s = AppStrings.of(context);
-    final store = SleepModeStore.instance;
+    final store = SleepModeStore.forFrame(widget.frame ?? DeviceStore.instance.cached);
     await store.setEnabled(_enabled);
     await store.setSchedule(start: _start, end: _end);
     final pushed = await store.pushConfigToFrame();
@@ -86,7 +87,7 @@ class _SleepSettingsScreenState extends State<SleepSettingsScreen> {
     // fresh telemetry at 500ms + 2000ms so "In Sleep Mode" -> "Online" and the
     // battery / SD-card numbers update without an app restart or 30s delay.
     if (!_enabled) {
-      final paired = DeviceStore.instance.cached;
+      final paired = widget.frame ?? DeviceStore.instance.cached;
       if (paired != null) {
         final mac = DeviceStore.macForPairedFrame(paired) ?? paired.deviceId;
         FrameApiClient().invalidateStatusCache(mac);

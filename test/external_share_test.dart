@@ -126,7 +126,11 @@ void main() {
           if (!statusRequested.isCompleted) statusRequested.complete();
           await allowStatus.future;
           return http.Response(
-            jsonEncode({'ok': true, 'online': true, 'status': 'online'}),
+            jsonEncode({
+              'ok': true, 'online': true, 'status': 'online',
+              'last_seen_ms': DateTime.now().millisecondsSinceEpoch,
+              'online_grace_ms': 120000,
+            }),
             200,
           );
         }

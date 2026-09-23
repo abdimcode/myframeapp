@@ -61,26 +61,23 @@ class DeviceStore {
     final t = deviceId.trim();
     final exact = _frames.indexWhere((e) => e.deviceId.trim() == t);
     if (exact >= 0) return exact;
-    // BLE ↔ STA siblings (±2) count as the same physical frame.
-    final key = FrameMacUtil.normalizeSlug(t)?.toUpperCase() ?? t.toUpperCase();
-    final keyInt = int.tryParse(key, radix: 16);
-    if (keyInt == null) return -1;
-    return _frames.indexWhere((e) {
-      final ed = FrameMacUtil.normalizeSlug(e.deviceId)?.toUpperCase() ??
-          e.deviceId.trim().toUpperCase();
-      final ei = int.tryParse(ed, radix: 16);
-      return ei != null && (ei - keyInt).abs() == 2;
-    });
+    return _frames.indexWhere((e) => _macsRelated(e.deviceId, t));
   }
 
   static bool _macsRelated(String a, String b) {
-    final aa = a.trim().toUpperCase();
-    final bb = b.trim().toUpperCase();
-    if (aa.isEmpty || bb.isEmpty) return false;
+    final aa = FrameMacUtil.normalizeSlug(a);
+    final bb = FrameMacUtil.normalizeSlug(b);
+    if (aa == null || bb == null) return false;
     if (aa == bb) return true;
-    final ia = int.tryParse(aa, radix: 16);
-    final ib = int.tryParse(bb, radix: 16);
-    return ia != null && ib != null && (ia - ib).abs() == 2;
+    // Only server-recorded aliases prove two addresses belong to one frame.
+    return instance._serverFrames.any((row) {
+      final aliases = <String>{};
+      for (final key in ['id', 'frame_id', 'bleMac', 'ble_mac', 'stationMac', 'station_mac']) {
+        final mac = FrameMacUtil.normalizeSlug('${row[key] ?? ''}');
+        if (mac != null) aliases.add(mac);
+      }
+      return aliases.contains(aa) && aliases.contains(bb);
+    });
   }
 
   static bool _seenHasRelated(Set<String> seen, String key) {
@@ -231,44 +228,19 @@ class DeviceStore {
   }
 
   /// Per-frame MAC for live status / cast.
-  /// Prefer BLE advertised name (real hardware MAC). Never treat iOS UUID as MAC.
+  /// Never treat iOS UUID as MAC.
+  /// Resolve from this frame only; global active-frame state is never a fallback.
   static String? macForPairedFrame(PairedFrame f) {
-    final fromBle = FrameMacUtil.macFromBleName(f.bleNamePrefix ?? '');
-    if (fromBle != null && fromBle.isNotEmpty) {
-      return PairedFrame.preferEsp32WifiStationMac(
-            fromBle,
-            fromBleAdvertisement: true,
-          ) ??
-          fromBle;
-    }
-    final global = DeviceStore.instance.pairedFrameMac;
-    if (global != null && global.isNotEmpty) return global;
-    final fromDevice = FrameMacUtil.normalizeSlug(f.deviceId);
-    if (fromDevice != null && fromDevice.isNotEmpty) {
-      return fromDevice;
-    }
-    final fromRemote = FrameMacUtil.normalizeSlug(f.bleRemoteId ?? '');
-    if (fromRemote != null && fromRemote.isNotEmpty) {
-      return fromRemote;
-    }
-    return FrameMacUtil.normalizeSlug(f.resolvedFrameTargetId);
+    return FrameMacUtil.normalizeSlug(f.deviceId) ??
+        FrameMacUtil.macFromBleName(f.bleNamePrefix ?? '') ??
+        FrameMacUtil.normalizeSlug(f.bleRemoteId ?? '');
   }
 
-  /// All MAC candidates to probe for online/status (BLE + STA siblings).
-  static List<String> statusMacCandidates(PairedFrame f) {
-    final keys = <String>{};
-    void add(String? raw) {
-      for (final c in FrameMacUtil.relatedMacCandidates(raw)) {
-        keys.add(c);
-      }
-    }
-    add(FrameMacUtil.macFromBleName(f.bleNamePrefix ?? ''));
-    add(DeviceStore.instance.pairedFrameMac);
-    add(FrameMacUtil.normalizeSlug(f.deviceId));
-    add(FrameMacUtil.normalizeSlug(f.bleRemoteId ?? ''));
-    add(macForPairedFrame(f));
-    return keys.toList();
-  }
+  /// Only identities stored on this frame, never guessed adjacent MACs.
+  static List<String> statusMacCandidates(PairedFrame f) => <String>{
+    if (macForPairedFrame(f) case final String mac) mac,
+    if (FrameMacUtil.macFromBleName(f.bleNamePrefix ?? '') case final String mac) mac,
+  }.toList();
 
   /// Frames shown on **My Frames** (order preserved).
   List<PairedFrame> get pairedFrames => List.unmodifiable(_frames);
@@ -399,17 +371,6 @@ class DeviceStore {
       final slug = PairedFrame.preferEsp32WifiStationMac(slugRaw) ?? slugRaw;
       final key = slug.trim().toUpperCase();
       if (key.isEmpty || seen.contains(key)) continue;
-      // Dedupe BLE/STA siblings already present under related key.
-      var relatedHit = false;
-      for (final s in seen) {
-        final a = int.tryParse(s, radix: 16);
-        final b = int.tryParse(key, radix: 16);
-        if (a != null && b != null && (a - b).abs() == 2) {
-          relatedHit = true;
-          break;
-        }
-      }
-      if (relatedHit) continue;
       // Honor explicit Remove/Delete — never resurrect unbound MACs.
       if (await _isUnboundMac(key) ||
           await _isUnboundMac(station) ||
@@ -426,9 +387,8 @@ class DeviceStore {
           existing = e;
           break;
         }
-        final ea = int.tryParse(ed, radix: 16);
-        final eb = int.tryParse(key, radix: 16);
-        if (ea != null && eb != null && (ea - eb).abs() == 2) {
+        if (ed == FrameMacUtil.normalizeSlug(mac) ||
+            ed == FrameMacUtil.normalizeSlug(frameId)) {
           existing = e;
           break;
         }
@@ -790,10 +750,7 @@ class DeviceStore {
       forgetPairedFrame(deviceId);
 
   String _macSlugForFrame(PairedFrame f) {
-    if (_pairedFrameMac != null && _pairedFrameMac!.length == 12) {
-      return _pairedFrameMac!;
-    }
-    return FrameMacUtil.normalizeSlug(f.resolvedFrameTargetId) ??
+    return macForPairedFrame(f) ??
         f.deviceId.replaceAll(RegExp(r'[^\w\-]'), 'FRAME');
   }
 
@@ -1351,26 +1308,10 @@ class PairedFrame {
       out.add(v);
     }
 
-    void addEsp32MacFamily(String mac) {
-      final bleFromWifi = _esp32BleMacFromWifiMac(mac);
-      if (bleFromWifi != null && bleFromWifi != mac) {
-        add(mac);
-        add(bleFromWifi);
-        return;
-      }
-      final wifiFromBle = _esp32WifiMacFromBleMac(mac);
-      if (wifiFromBle != null && wifiFromBle != mac) {
-        add(wifiFromBle);
-        add(mac);
-        return;
-      }
+    // The backend resolves explicitly observed BLE/STA aliases. Do not
+    // probe neighboring addresses, which can belong to another frame.
+    for (final mac in [idMac, nameMac, bleMac]) {
       add(mac);
-    }
-
-    final seenMacs = <String>{};
-    for (final mac in [nameMac, idMac, bleMac]) {
-      if (mac == null || !seenMacs.add(mac)) continue;
-      addEsp32MacFamily(mac);
     }
 
     if (out.isEmpty &&
@@ -1397,10 +1338,8 @@ class PairedFrame {
 
   /// For backend frame commands, target the Wi-Fi/MQTT MAC rather than the BLE MAC.
   String get resolvedFrameTargetId {
-    final stored = DeviceStore.instance.pairedFrameMac;
-    if (stored != null && stored.isNotEmpty) {
-      return preferEsp32WifiStationMac(stored) ?? stored;
-    }
+    final ownMac = DeviceStore.macForPairedFrame(this);
+    if (ownMac != null) return ownMac;
     final ids = resolvedFrameTargetCandidates;
     if (ids.isNotEmpty) return ids.first;
     final id = deviceId.trim();
@@ -1433,14 +1372,6 @@ class PairedFrame {
     final value = int.tryParse(bleMac, radix: 16);
     if (value == null || value < 2) return null;
     return (value - 2).toRadixString(16).toUpperCase().padLeft(12, '0');
-  }
-
-  static String? _esp32BleMacFromWifiMac(String wifiMac) {
-    final value = int.tryParse(wifiMac, radix: 16);
-    if (value == null) return null;
-    final max = (1 << 48) - 1;
-    if (value > max - 2) return null;
-    return (value + 2).toRadixString(16).toUpperCase().padLeft(12, '0');
   }
 
   static String? _macFromText(String raw) {

@@ -26,6 +26,7 @@ class FrameStatus {
     this.photoCount = 0,
     this.mqttConnected = false,
     this.lastSeenMs,
+    this.onlineGraceMs = 900000,
     this.lastUploadMs,
     this.firmwareVersion,
     this.hasUpdate = false,
@@ -64,6 +65,7 @@ class FrameStatus {
   final int photoCount;
   final bool mqttConnected;
   final int? lastSeenMs;
+  final int onlineGraceMs;
   final int? lastUploadMs;
   final String? firmwareVersion;
   /// True when the backend reports an OTA firmware update is available.
@@ -150,6 +152,7 @@ class FrameStatus {
       photoCount: json['photo_count'] as int? ?? 0,
       mqttConnected: json['mqtt_connected'] == true || reachable,
       lastSeenMs: json['last_seen_ms'] as int?,
+      onlineGraceMs: (json['online_grace_ms'] as num?)?.toInt() ?? 900000,
       lastUploadMs: json['last_upload_ms'] as int?,
       firmwareVersion: json['firmwareVersion'] as String?,
       hasUpdate: (json['ota'] as Map<String, dynamic>?)?['hasUpdate'] == true,
@@ -180,7 +183,13 @@ class FrameStatus {
   }
 
   /// User-facing connection label key.
-  bool get isEffectivelyOnline => online || sleeping;
+  bool get isEffectivelyOnline {
+    if (!online && !sleeping) return false;
+    final seen = lastSeenMs;
+    if (seen == null || seen <= 0) return false;
+    final age = DateTime.now().millisecondsSinceEpoch - seen;
+    return age >= 0 && age < onlineGraceMs;
+  }
 }
 
 class _CachedFrameStatus {

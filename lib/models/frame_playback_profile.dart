@@ -14,11 +14,13 @@ class FramePlaybackProfile {
   final int intervalMinutes;
   final String playbackMode;
   final int durationHours;
+  final int idle;
 
   const FramePlaybackProfile({
     this.intervalMinutes = 10,
     this.playbackMode = 'sequential',
     this.durationHours = 6,
+    this.idle = 1,
   });
 
   /// Defaults applied to EXTERNAL SHARING payloads (gallery → app): 10 min /
@@ -41,11 +43,13 @@ class FramePlaybackProfile {
     int? intervalMinutes,
     String? playbackMode,
     int? durationHours,
+    int? idle,
   }) =>
       FramePlaybackProfile(
         intervalMinutes: intervalMinutes ?? this.intervalMinutes,
         playbackMode: playbackMode ?? this.playbackMode,
         durationHours: durationHours ?? this.durationHours,
+        idle: idle ?? this.idle,
       );
 
   /// Frame settings API payload — the global defaults stored on the frame's
@@ -54,6 +58,7 @@ class FramePlaybackProfile {
         'global_interval': intervalMinutes,
         'global_playback_mode': playbackMode,
         'global_duration': durationHours,
+        'idle': idle,
       };
 
   Map<String, dynamic> toJson() => toFrameSettingsPayload();
@@ -76,6 +81,7 @@ class FramePlaybackProfile {
       intervalMinutes: interval is num ? interval.toInt() : 10,
       playbackMode: mode,
       durationHours: duration is num ? duration.toInt() : 6,
+      idle: json['idle'] == 0 ? 0 : 1,
     );
   }
 

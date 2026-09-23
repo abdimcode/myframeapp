@@ -12,7 +12,8 @@ import '../services/frame_api_client.dart';
 /// notes, and an "Install update" button that triggers the backend OTA MQTT
 /// pipeline (offline guard + confirmation dialog).
 class FirmwareScreen extends StatefulWidget {
-  const FirmwareScreen({super.key});
+  const FirmwareScreen({super.key, this.frame});
+  final PairedFrame? frame;
 
   @override
   State<FirmwareScreen> createState() => _FirmwareScreenState();
@@ -36,9 +37,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   Future<void> _load() async {
     await DeviceStore.instance.load();
     final frames = DeviceStore.instance.pairedFrames;
+    if (!mounted) return;
     setState(() {
       _frames = frames;
-      _selected = frames.isNotEmpty ? frames.first : null;
+      _selected = widget.frame ?? DeviceStore.instance.cached ?? (frames.isNotEmpty ? frames.first : null);
     });
     await _refresh();
   }
@@ -82,14 +84,14 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     final api = FrameApiClient();
     try {
       final info = await api.fetchFirmware(mac: mac, pairingToken: f.pairingToken);
-      if (mounted) {
+      if (mounted && _selected?.deviceId == f.deviceId) {
         setState(() {
           _info = info;
           _loading = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && _selected?.deviceId == f.deviceId) setState(() => _loading = false);
     } finally {
       api.close();
     }

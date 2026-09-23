@@ -601,7 +601,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           if (!mounted) return;
                           await Navigator.push<void>(
                             context,
-                            MaterialPageRoute<void>(builder: (_) => const DeviceDetailsScreen()),
+                            MaterialPageRoute<void>(builder: (_) => DeviceDetailsScreen(frame: f)),
                           );
                           await _load();
                         },

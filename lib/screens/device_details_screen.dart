@@ -9,7 +9,9 @@ import '../services/frame_forget_service.dart';
 import '../widgets/text_input_bottom_sheet.dart';
 
 class DeviceDetailsScreen extends StatefulWidget {
-  const DeviceDetailsScreen({super.key});
+  const DeviceDetailsScreen({super.key, this.frame});
+
+  final PairedFrame? frame;
 
   @override
   State<DeviceDetailsScreen> createState() => _DeviceDetailsScreenState();
@@ -64,7 +66,7 @@ class _DeviceDetailsScreenState extends State<DeviceDetailsScreen>
   Future<void> _load() async {
     await DeviceStore.instance.load();
     if (mounted) {
-      setState(() => _paired = DeviceStore.instance.cached);
+      setState(() => _paired = widget.frame ?? DeviceStore.instance.cached);
       await _fetch();
     }
   }
@@ -81,7 +83,9 @@ class _DeviceDetailsScreenState extends State<DeviceDetailsScreen>
         force: force,
         pairingToken: p.resolvedPairingToken,
       );
-      if (mounted) setState(() => _status = st);
+      if (mounted && st != null && identical(p, _paired)) {
+        setState(() => _status = st);
+      }
     } catch (_) {}
   }
 
@@ -114,13 +118,11 @@ class _DeviceDetailsScreenState extends State<DeviceDetailsScreen>
   String get _wifiSsid {
     final p = _paired;
     final st = _status;
-    // Live online status is authoritative — never show a stale local SSID as
-    // "connected" after a failed provision.
+    // Preserve this frame's last known network even while it is offline.
     if (st != null) {
-      if (st.isEffectivelyOnline && st.wifiSsid.trim().isNotEmpty) {
+      if (st.wifiSsid.trim().isNotEmpty) {
         return st.wifiSsid;
       }
-      if (!st.isEffectivelyOnline) return '--';
     }
     if (p?.wifiSsid?.trim().isNotEmpty == true && p!.isWifiProvisioned) {
       return p.wifiSsid!;

@@ -35,6 +35,11 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  PairedFrame? _selectedFrame;
+  List<PairedFrame> _frames = [];
+  final Map<String, FrameStatus> _statuses = {};
+  bool _savingDeviceSetting = false;
+  int _selectionGeneration = 0;
   var _sleepEnabled = false;
   var _autoOtaEnabled = false;
   TimeOfDay _sleepStart = SleepModeStore.defaultStart;
@@ -58,62 +63,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _onFramesChanged() {
-    // Newly connected frame auto-enables sleep / OTA when unset.
+    // Reload only the selected frame when the device list changes.
     unawaited(_loadDeviceToggles());
   }
 
   Future<void> _loadDeviceToggles() async {
-    await Future.wait([
-      SleepModeStore.instance.resolveForUi(),
-      OtaUpdateStore.instance.resolveForUi(),
-    ]);
-    if (!mounted) return;
-    final sleep = SleepModeStore.instance;
-    final ota = OtaUpdateStore.instance;
-    // Keep AppSettings OTA flags aligned with the resolved UI value.
-    final app = AppSettingsScope.of(context);
-    if (app.automaticFrameFirmwareUpdates != ota.enabled) {
-      await app.setAutomaticFrameFirmwareUpdates(ota.enabled);
-    }
-    if (!mounted) return;
-    setState(() {
-      _sleepEnabled = sleep.enabled;
-      _sleepStart = sleep.startTime;
-      _sleepEnd = sleep.endTime;
-      _sleepReady = true;
-      _autoOtaEnabled = ota.enabled;
-      _otaReady = true;
-    });
-    unawaited(_loadFirmwareInfo());
-  }
-
-  /// Fetch the frame's dynamic firmware version + OTA availability.
-  Future<void> _loadFirmwareInfo() async {
+    final generation = ++_selectionGeneration;
     await DeviceStore.instance.load();
-    final frames = DeviceStore.instance.pairedFrames;
-    final paired = frames.isEmpty ? DeviceStore.instance.cached : frames.first;
-    if (paired == null) return;
-    final mac = DeviceStore.macForPairedFrame(paired);
-    if (mac == null || mac.isEmpty) return;
+    if (!mounted || generation != _selectionGeneration) return;
+    _frames = DeviceStore.instance.pairedFrames;
+    if (!_frames.any((f) => f.deviceId == _selectedFrame?.deviceId)) {
+      _selectedFrame = DeviceStore.instance.cached ?? (_frames.isEmpty ? null : _frames.first);
+    }
+    final selected = _selectedFrame;
+    setState(() { _sleepReady = false; _otaReady = false; _firmwareVersion = '--'; _hasUpdate = false; });
+    if (selected == null) return;
+    final sleep = SleepModeStore.forFrame(selected);
+    final ota = OtaUpdateStore.forFrame(selected);
+    await Future.wait([sleep.resolveForUi(), ota.resolveForUi()]);
+    if (!mounted || generation != _selectionGeneration) return;
+    setState(() {
+      _sleepEnabled = sleep.enabled; _sleepStart = sleep.startTime; _sleepEnd = sleep.endTime;
+      _autoOtaEnabled = ota.enabled; _sleepReady = true; _otaReady = true;
+    });
     final api = FrameApiClient();
     try {
-      final st = await api.fetchFrameStatus(
-        mac: mac,
-        pairingToken: paired.resolvedPairingToken,
-      );
-      if (st == null || !mounted) return;
-      final fw = st.firmwareVersion;
-      setState(() {
-        _firmwareVersion = (fw == null || fw.isEmpty)
-            ? '--'
-            : (fw.startsWith('v') ? fw : 'v$fw');
-        _hasUpdate = st.hasUpdate;
-      });
-    } catch (_) {
-    } finally {
-      api.close();
-    }
+      await Future.wait(_frames.map((frame) async {
+        final mac = DeviceStore.macForPairedFrame(frame);
+        if (mac == null) return;
+        final status = await api.fetchFrameStatus(mac: mac);
+        if (!mounted || generation != _selectionGeneration || status == null) return;
+        setState(() {
+          _statuses[frame.deviceId] = status;
+          if (frame.deviceId == selected.deviceId) {
+            _firmwareVersion = status.firmwareVersion ?? '--'; _hasUpdate = status.hasUpdate;
+          }
+        });
+      }));
+    } finally { api.close(); }
   }
+
+  Widget _frameSelector(AppStrings s) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: _frames.map((f) {
+      final status = _statuses[f.deviceId];
+      final label = status == null ? '…' : status.isEffectivelyOnline ? s.statusOnline : s.statusOffline;
+      return Padding(padding: const EdgeInsets.only(right: 8), child: ChoiceChip(
+        label: Text('${f.listDisplayTitle(s)} · $label'),
+        selected: _selectedFrame?.deviceId == f.deviceId,
+        onSelected: _savingDeviceSetting ? null : (_) {
+          setState(() => _selectedFrame = f); unawaited(_loadDeviceToggles());
+        },
+      ));
+    }).toList())),
+    if (_selectedFrame != null && _statuses[_selectedFrame!.deviceId]?.isEffectivelyOnline == false)
+      Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(
+        s.locale == AppLocale.zh ? '更改将在相框重新连接后生效。' : 'Changes will apply when frame reconnects.',
+        style: Theme.of(context).textTheme.bodySmall)),
+    const SizedBox(height: 8),
+  ]);
 
   String _languageSubtitle(AppSettings app, AppStrings s) {
     return switch (app.languageCode) {
@@ -150,16 +157,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _onSleepToggle(bool value) async {
-    setState(() => _sleepEnabled = value);
-    await SleepModeStore.instance.setEnabled(value);
-    unawaited(SleepModeStore.instance.pushConfigToFrame());
+    final frame = _selectedFrame;
+    if (frame == null || _savingDeviceSetting) return;
+    setState(() => _savingDeviceSetting = true);
+    final store = SleepModeStore.forFrame(frame);
+    await store.setEnabled(value);
+    final ok = await store.pushConfigToFrame();
+    if (!mounted) return;
+    setState(() { _savingDeviceSetting = false; if (ok) _sleepEnabled = value; });
+    if (!ok) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppStrings.of(context).locale == AppLocale.zh ? '无法保存设置，请重试。' : 'Could not save settings. Please retry.')));
   }
 
   Future<void> _onOtaToggle(bool value) async {
-    setState(() => _autoOtaEnabled = value);
-    await OtaUpdateStore.instance.setEnabled(value);
-    if (!mounted) return;
-    await AppSettingsScope.of(context).setAutomaticFrameFirmwareUpdates(value);
+    final frame = _selectedFrame;
+    if (frame == null || _savingDeviceSetting) return;
+    setState(() => _savingDeviceSetting = true);
+    try {
+      await OtaUpdateStore.forFrame(frame).setEnabled(value);
+      if (mounted) setState(() => _autoOtaEnabled = value);
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppStrings.of(context).locale == AppLocale.zh ? '无法保存设置，请重试。' : 'Could not save settings. Please retry.')));
+    } finally { if (mounted) setState(() => _savingDeviceSetting = false); }
   }
 
   Future<void> _confirmSignOut(BuildContext context) async {
@@ -179,11 +197,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await AppSettingsScope.of(context).setSignedIn(value: false);
   }
 
-  void _openSleepSettings() {
-    Navigator.push<void>(
+  Future<void> _openSleepSettings() async {
+    await Navigator.push<void>(
       context,
-      MaterialPageRoute<void>(builder: (_) => const SleepSettingsScreen()),
+      MaterialPageRoute<void>(builder: (_) => SleepSettingsScreen(frame: _selectedFrame)),
     );
+    if (mounted) await _loadDeviceToggles();
   }
 
   @override
@@ -216,6 +235,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
           const SizedBox(height: 16),
           _sectionHeader(s.settingsSectionFrame, cs),
+          _frameSelector(s),
           _buildGroup(cs, [
             _tile(
               context: context,
@@ -237,7 +257,7 @@ _tile(
               title: s.frameProfileNavTitle,
               subtitle: s.frameProfileNavSub,
               onTap: () => Navigator.push<void>(
-                context, MaterialPageRoute<void>(builder: (_) => FrameSettingsScreen()),
+                context, MaterialPageRoute<void>(builder: (_) => FrameSettingsScreen(frame: _selectedFrame)),
               ),
             ),
             _divider(cs),
@@ -249,7 +269,7 @@ _tile(
               trailing: Switch.adaptive(
                 value: _sleepEnabled,
                 activeTrackColor: _red,
-                onChanged: _sleepReady
+                onChanged: _sleepReady && !_savingDeviceSetting
                     ? (v) => unawaited(_onSleepToggle(v))
                     : null,
               ),
@@ -264,12 +284,12 @@ _tile(
               trailing: Switch.adaptive(
                 value: _autoOtaEnabled,
                 activeTrackColor: _red,
-                onChanged: _otaReady
+                onChanged: _otaReady && !_savingDeviceSetting
                     ? (v) => unawaited(_onOtaToggle(v))
                     : null,
               ),
               onTap: () => Navigator.push<void>(
-                context, MaterialPageRoute<void>(builder: (_) => const FirmwareScreen()),
+                context, MaterialPageRoute<void>(builder: (_) => FirmwareScreen(frame: _selectedFrame)),
               ),
             ),
           ]),
